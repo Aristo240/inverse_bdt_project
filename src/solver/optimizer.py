@@ -12,14 +12,20 @@ def inverse_bdt_solver(
 ):
     """
     Recovers (w, lambda) given observed choices.
+    Returns: (params, success, debug_info)
     """
-    print(f"Starting Inverse Optimization on {len(choices)} samples...")
+    n_samples = len(choices)
+    print(f"Starting Inverse Optimization on {n_samples} samples...")
     
-    # 1. Check for data variance
+    # Sanity Check: Ensure data alignment
+    if len(lotteries_A) != n_samples or len(lotteries_B) != n_samples:
+        raise ValueError(f"Mismatch: {len(lotteries_A)} lotteries vs {n_samples} choices")
+
+    # Sanity Check: Variance
     if len(np.unique(choices)) == 1:
         print("WARNING: All choices are identical. Solver may be unstable.")
 
-    # 2. Pre-compute statistics
+    # Pre-compute statistics
     stats_A = [l.get_stats() for l in lotteries_A]
     stats_B = [l.get_stats() for l in lotteries_B]
     
@@ -49,7 +55,7 @@ def inverse_bdt_solver(
         # NLL
         ll = -np.sum(y * np.log(p_A) + (1 - y) * np.log(1 - p_A))
         
-        # L2 Regularization (keeps weights from exploding)
+        # L2 Regularization
         reg = l2_reg * (np.sum(w**2) + lam**2)
         
         return ll + reg
@@ -64,4 +70,4 @@ def inverse_bdt_solver(
         bounds=bounds
     )
     
-    return result.x, result.success
+    return result.x, result.success, result

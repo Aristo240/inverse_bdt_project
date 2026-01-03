@@ -5,20 +5,26 @@ channels:
   - defaults
 dependencies:
   - python=3.10
-  - pytorch
-  - torchvision
-  - torchaudio
-  - pytorch-cuda=12.1
+  - pip
   - numpy
   - scipy
   - scikit-learn
   - matplotlib
   - pandas
+  - pyyaml     
+  - requests      
   - tqdm
-  - pip
+  - typing_extensions
   - pip:
+    - torch
+    - torchvision
+    - torchaudio
     - transformers
     - accelerate
-    - bitsandbytes  # Critical for running models with less VRAM
-    - python-dotenv # For managing secrets if needed
-    - ipykernel     # For running notebooks
+    - bitsandbytes
+    - huggingface_hub
+    - regex
+    - packaging
+    - filelock
+    - python-dotenv
+    - ipykernel
