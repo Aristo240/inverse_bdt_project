@@ -9,12 +9,13 @@ class OpenLLM:
         self.device = device
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         
-        # Load model in standard FP16 (No Quantization)
+        # Load model in standard FP16 (No Quantization for stability)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float16
         ).to(self.device)
         
+        # Ensure pad token exists
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -34,7 +35,7 @@ class OpenLLM:
                 **inputs, 
                 max_new_tokens=5,     
                 min_new_tokens=1,
-                do_sample=False,
+                do_sample=False, # Deterministic
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id
             )
@@ -42,10 +43,12 @@ class OpenLLM:
         generated_tokens = outputs[0][inputs['input_ids'].shape[1]:]
         response_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
         
+        # Robust Parsing
         clean_text = re.sub(r"[^\w\s]", "", response_text).lower()
         
         if "a" in clean_text: return 1
         if "b" in clean_text: return 0
         
-        print(f"\n[DEBUG] Raw Output: '{response_text}'")
+        # Fallback debug
+        # print(f"\n[DEBUG] Raw Output: '{response_text}'")
         return -1
