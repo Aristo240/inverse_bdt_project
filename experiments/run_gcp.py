@@ -8,36 +8,35 @@ import datetime
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+# Ensure we can import from src/
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.utils.structures import Lottery, Outcome
 from src.solver.optimizer import inverse_bdt_solver
 
 # --- CONFIGURATION ---
-N_SAMPLES = 10 
+N_SAMPLES = 10  # Start with 10 for safety. Scale to 50 later.
 
-# Only models that fit on V100 (Float16)
+# These models crash on V100s but run perfectly on A100s
 MODELS = {
-    "mistral_7b":  {"id": "mistralai/Mistral-7B-Instruct-v0.2"},
-    "llama3_8b":   {"id": "meta-llama/Meta-Llama-3.1-8B-Instruct"},
-    "gemma2_9b":   {"id": "google/gemma-2-9b-it"},
-    "qwen2.5_7b":  {"id": "Qwen/Qwen2.5-7B-Instruct"},
-    "deepseek_7b": {"id": "deepseek-ai/deepseek-llm-7b-chat"},
+    "gemma2_27b":  {"id": "google/gemma-2-27b-it"},
+    "llama3_70b":  {"id": "meta-llama/Meta-Llama-3.1-70B-Instruct"},
 }
 
 class UniversalLLM:
     def __init__(self, config):
         self.model_id = config["id"]
-        print(f"\n[Loader] Loading {self.model_id}...")
+        print(f"\n[Loader] Loading {self.model_id} on A100s...")
         
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Load locally on V100
+        # NEURIPS RIGOR: BFloat16 on A100 (No Quantization)
+        # device_map="auto" splits the model across the 2x GPUs automatically
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id, 
-            torch_dtype=torch.float16, 
-            device_map="cuda:0", 
+            torch_dtype=torch.bfloat16, 
+            device_map="auto", 
             trust_remote_code=True
         )
 
@@ -56,7 +55,7 @@ class UniversalLLM:
 
         messages = [{"role": "user", "content": prompt_text}]
         
-        # 2. Chat Templates
+        # 2. Apply Chat Template (Critical for Llama-3/Gemma-2)
         try:
             full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         except:
@@ -65,14 +64,10 @@ class UniversalLLM:
         inputs = self.tokenizer(full_prompt, return_tensors="pt").to(self.model.device)
 
         # 3. Deterministic Generation
-        # Give DeepSeek space to yap, others short
-        is_chatty = "deepseek" in self.model_id
-        max_tokens = 50 if is_chatty else 20
-
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs, 
-                max_new_tokens=max_tokens, 
+                max_new_tokens=50, # Enough room to speak, but parsing is strict
                 do_sample=True,
                 temperature=0.01, 
                 top_p=0.01,
@@ -131,7 +126,7 @@ def gen_microrisk(n=10):
 # --- RUNNER ---
 def run_benchmark():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = f"experiments/logs/benchmark_{timestamp}"
+    log_dir = f"logs_gcp_{timestamp}"
     os.makedirs(log_dir, exist_ok=True)
     print(f"\n📂 Saving to: {log_dir}")
 
@@ -159,7 +154,7 @@ def run_benchmark():
                         choices.append(c)
                         valid_indices.append(i)
                 
-                # --- SAVE METRICS ---
+                # METRICS & CENSORING
                 n_valid = len(choices)
                 censor_rate = 1.0 - (n_valid / N_SAMPLES) if N_SAMPLES > 0 else 0
                 
@@ -169,6 +164,7 @@ def run_benchmark():
                     "params": [params[i] for i in valid_indices]
                 }
 
+                # RUN SOLVER ONLY IF DATA EXISTS
                 if n_valid > 2:
                     valid_lots_A = [lots_A[i] for i in valid_indices]
                     valid_lots_B = [lots_B[i] for i in valid_indices]
@@ -180,18 +176,14 @@ def run_benchmark():
                     except:
                         gap, nll_lin, nll_bdt = 0.0, 0.0, 0.0
                     
-                    result_data.update({
-                        "safe_pct": safe_pct, 
-                        "gap": gap, 
-                        "nll_lin": nll_lin, 
-                        "nll_bdt": nll_bdt
-                    })
+                    result_data.update({"safe_pct": safe_pct, "gap": gap, "nll_lin": nll_lin, "nll_bdt": nll_bdt})
                     print(f"  -> Safe: {safe_pct*100:.1f}% | Gap: {gap:.4f} | Censor: {censor_rate*100:.1f}%")
                 else:
                     print(f"  -> Insufficient valid choices (Censor: {censor_rate*100:.1f}%)")
                 
                 model_results["experiments"][phase_name] = result_data
 
+            # Run All Phases
             run_phase("godfather", gen_godfather)
             run_phase("sensitivity", gen_sensitivity)
             run_phase("microrisk", gen_microrisk)
