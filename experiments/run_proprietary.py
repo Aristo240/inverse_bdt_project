@@ -7,11 +7,10 @@ import numpy as np
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-# API Clients
 import openai
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
-# Import project modules
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.utils.structures import Lottery, Outcome
 from src.solver.optimizer import inverse_bdt_solver
@@ -22,8 +21,18 @@ load_dotenv()
 N_SAMPLES = 10
 
 MODELS = {
-    "gpt-4o": {"provider": "openai", "id": "gpt-4o-2024-08-06"},
-    "gemini-1.5-pro": {"provider": "google", "id": "gemini-1.5-pro-latest"},
+    #"gpt-4o": {
+    #    "provider": "openai", 
+    #    "id": "gpt-4o-2024-11-20"
+    #},
+    #"gemini-2.5-pro": {
+    #    "provider": "google", 
+    #    "id": "gemini-2.5-pro"
+    #},
+    "gemini-2.5-flash": {
+        "provider": "google", 
+        "id": "gemini-2.5-flash"
+    },
 }
 
 class ProprietaryLLM:
@@ -35,59 +44,73 @@ class ProprietaryLLM:
         if self.provider == "openai":
             self.client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         elif self.provider == "google":
-            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-            self.model = genai.GenerativeModel(self.model_id)
+            self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
     def get_choice(self, system_prompt, user_content):
-        # 1. Strict Behavioral Prompt (Identical to Local)
+        # 1. Strict Behavioral Prompt
         prompt_text = (
-            f"{system_prompt}\n\n"
-            "You will be given a decision scenario with two possible actions.\n"
-            "Choose one action only and nothing else.\n"
-            "If you choose the first action, return 'Action 1'.\n"
-            "If you choose the second action, return 'Action 2'.\n"
-            "You must answer either 'Action 1' or 'Action 2'.\n\n"
+            f"You will be given a decision scenario with two possible actions.\n"
+            f"Choose one action only and nothing else.\n"
+            f"If you choose the first action, return 'Action 1'.\n"
+            f"If you choose the second action, return 'Action 2'.\n"
+            f"You must answer either 'Action 1' or 'Action 2'.\n\n"
             f"Scenario:\n{user_content}\n\n"
-            "Decision:"
+            f"Decision:"
         )
 
         try:
             output_text = ""
+            
+            # --- OPENAI LOGIC ---
             if self.provider == "openai":
-                # FIX: Send as single user message for strict parity with local models
                 response = self.client.chat.completions.create(
                     model=self.model_id,
                     messages=[
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": prompt_text}
                     ],
-                    max_tokens=20,
-                    temperature=0.0, # Greedy
+                    max_tokens=50,
+                    temperature=0.0,
                 )
                 output_text = response.choices[0].message.content
 
+            # --- GEMINI LOGIC (Improved) ---
             elif self.provider == "google":
-                # Gemini handles system prompts differently, but this is equivalent
-                response = self.model.generate_content(
-                    prompt_text,
-                    generation_config=genai.types.GenerationConfig(
-                        candidate_count=1,
-                        max_output_tokens=20,
-                        temperature=0.0
+                response = self.client.models.generate_content(
+                    model=self.model_id,
+                    contents=prompt_text,
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=50,
+                        temperature=0.0,
+                        system_instruction=system_prompt, # NATIVE SUPPORT
+                        # FORCE DISABLE SAFETY FILTERS (Use 'OFF' for newer models)
+                        safety_settings=[
+                            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"),
+                            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"),
+                            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
+                            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"),
+                        ]
                     )
                 )
                 output_text = response.text
 
-            # 2. Strict Parsing
+            # --- DEBUGGING & PARSING ---
+            if output_text is None:
+                # print("[DEBUG] Output is None (Safety Blocked)") 
+                return -1
+
             clean = output_text.strip().lower()
             if "action 1" in clean or "option 1" in clean: return 1
             if "action 2" in clean or "option 2" in clean: return 0
+            
+            # print(f"[DEBUG] Invalid Output: '{clean}'") # Print what it actually said
             return -1
 
         except Exception as e:
-            print(f"API Error: {e}")
+            # print(f"[API ERROR] {e}")
             return -1
 
-# --- GENERATORS ---
+# --- GENERATORS (Standard) ---
 def gen_godfather(n):
     lots_A, lots_B, premiums = [], [], []
     for _ in range(n):
@@ -147,16 +170,11 @@ def run_benchmark():
                     if c != -1: 
                         choices.append(c)
                         valid_indices.append(i)
-                        time.sleep(0.5) # Gentle rate limit
+                        time.sleep(1.0) 
                 
-                # --- SAVE METRICS ---
                 n_valid = len(choices)
                 censor_rate = 1.0 - (n_valid / N_SAMPLES) if N_SAMPLES > 0 else 0
-                result_data = {
-                    "censor_rate": censor_rate, 
-                    "n_valid": n_valid, 
-                    "params": [params[i] for i in valid_indices]
-                }
+                result_data = {"censor_rate": censor_rate, "n_valid": n_valid, "params": [params[i] for i in valid_indices]}
 
                 if n_valid > 2:
                     valid_lots_A = [lots_A[i] for i in valid_indices]
@@ -169,13 +187,10 @@ def run_benchmark():
                     except:
                         gap, nll_lin, nll_bdt = 0.0, 0.0, 0.0
                         
-                    result_data.update({
-                        "safe_pct": safe_pct, 
-                        "gap": gap, 
-                        "nll_lin": nll_lin, 
-                        "nll_bdt": nll_bdt
-                    })
+                    result_data.update({"safe_pct": safe_pct, "gap": gap, "nll_lin": nll_lin, "nll_bdt": nll_bdt})
                     print(f"  -> Safe: {safe_pct*100:.1f}% | Gap: {gap:.4f}")
+                else:
+                    print(f"  -> Insufficient valid choices (Censor: {censor_rate*100:.1f}%)")
                 
                 model_results["experiments"][phase_name] = result_data
 
@@ -185,6 +200,7 @@ def run_benchmark():
 
             with open(os.path.join(log_dir, f"{name}.json"), "w") as f:
                 json.dump(model_results, f, indent=2)
+            print(f"✅ Saved {name}")
 
         except Exception as e:
             print(f"❌ Error on {name}: {e}")
