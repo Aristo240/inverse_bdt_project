@@ -2,7 +2,7 @@
 
 **A framework to mathematically disentangle Values from Risk-Sensitivity in Large Language Models.**
 
-![Behavioral Scaling Law](plots/scaling_law.jpg)
+![Behavioral Scaling Law](plots/scaling_law.png)
 > **Figure 1:** Pilot results (N=10) showing the "Behavioral Scaling Law." Small models exhibit Safety Absolutism ($\lambda \to \infty$), while frontier models recover rational risk trade-offs.
 
 ---
