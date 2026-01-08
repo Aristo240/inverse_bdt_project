@@ -16,9 +16,6 @@ The framework implements a text-based decision protocol ("Lotteries") in which m
 
 By varying risk magnitude and utility gain, we estimate latent decision policies and test competing hypotheses about model alignment behavior.
 
-![Behavioral Scaling Law](plots/scaling_law.png)
-> **Figure 1:** Pilot results (N=10) showing the "Behavioral Scaling Law." Small models exhibit Safety Absolutism ($\lambda \to \infty$), while frontier models recover rational risk trade-offs.
-
 ---
 
 ## 🚀 Pilot Results (Summary)
@@ -36,6 +33,10 @@ Larger models exhibited graded tradeoffs between safety and utility.
 * **Llama-3-70B:** 60% safe
 * **GPT-4o:** 50% safe
 * **Interpretation:** These models weigh probability against utility rather than defaulting to refusal.
+
+![Behavioral Scaling Law](plots/scaling_law.png)
+> **Figure 1:** Pilot results (N=10) showing the "Behavioral Scaling Law." Small models exhibit Safety Absolutism ($\lambda \to \infty$), while frontier models recover rational risk trade-offs.
+
 
 ### 3. Falsification of Linear Reward Hypothesis
 Frontier models could not be fit by a linear expected-utility model, exhibiting a significant **"Linearity Gap"**.
