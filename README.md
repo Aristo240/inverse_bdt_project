@@ -61,17 +61,17 @@ Persona and semantic ablations on Mistral-7B showed persistent refusal even unde
 ### 1. Install Dependencies
 ```bash
 pip install -r requirements.txt
-
+```
 
 ### 2. Run the Benchmark (Open Weights)
 Run the full suite of protocols (Godfather, Sensitivity, Microrisk) on a local model:
 ```bash
 Bashpython experiments/run_benchmark.py
-
+```
 Note: Requires a GPU for local inference (defaults to cuda:0).
 
 ### 3. Run the Inverse SolverFit the risk parameters ($\lambda$, $\mathbf{w}$) to the collected choice data:
 ```bash
 python src/solver/optimizer.py
-
+```
 ## Status: Active research project.
