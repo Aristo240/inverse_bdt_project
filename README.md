@@ -66,7 +66,7 @@ pip install -r requirements.txt
 ### 2. Run the Benchmark (Open Weights)
 Run the full suite of protocols (Godfather, Sensitivity, Microrisk) on a local model:
 ```bash
-Bashpython experiments/run_benchmark.py
+python experiments/run_benchmark.py
 ```
 Note: Requires a GPU for local inference (defaults to cuda:0).
 
