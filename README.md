@@ -74,4 +74,5 @@ Note: Requires a GPU for local inference (defaults to cuda:0).
 ```bash
 python src/solver/optimizer.py
 ```
-## Status: Active research project.
+## Status: 
+Active research project.
