@@ -2,9 +2,6 @@
 
 **A framework to mathematically disentangle Values from Risk-Sensitivity in Large Language Models.**
 
-![Behavioral Scaling Law](plots/scaling_law.png)
-> **Figure 1:** Pilot results (N=10) showing the "Behavioral Scaling Law." Small models exhibit Safety Absolutism ($\lambda \to \infty$), while frontier models recover rational risk trade-offs.
-
 ---
 
 ## 🔍 Overview
@@ -18,6 +15,9 @@ The framework implements a text-based decision protocol ("Lotteries") in which m
 - A risky option with explicitly stated probability and utility ($L_B$)
 
 By varying risk magnitude and utility gain, we estimate latent decision policies and test competing hypotheses about model alignment behavior.
+
+![Behavioral Scaling Law](plots/scaling_law.png)
+> **Figure 1:** Pilot results (N=10) showing the "Behavioral Scaling Law." Small models exhibit Safety Absolutism ($\lambda \to \infty$), while frontier models recover rational risk trade-offs.
 
 ---
 
