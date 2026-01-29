@@ -6,6 +6,7 @@ import numpy as np
 import json
 import datetime
 import argparse
+import time
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -25,8 +26,9 @@ N_SAMPLES = 5 if args.test else 100
 MODELS = {
     "mistral_7b":  {"id": "mistralai/Mistral-7B-Instruct-v0.2"},
     "llama3_8b":   {"id": "meta-llama/Meta-Llama-3.1-8B-Instruct"}, 
-    "gemma2_9b":   {"type": "local", "id": "google/gemma-2-9b-it"},
-    "qwen2.5_7b":  {"type": "local", "id": "Qwen/Qwen2.5-7B-Instruct"},
+    "gemma2_9b":   {"id": "google/gemma-2-9b-it"},
+    "qwen2.5_7b":  {"id": "Qwen/Qwen2.5-7B-Instruct"},
+    "deepseek_8b": {"id": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"},
 }
 
 class UniversalLLM:
@@ -45,16 +47,31 @@ class UniversalLLM:
         )
 
     def get_choice(self, system_prompt, user_content):
-        prompt_text = (
-            f"{system_prompt}\n\n"
-            "You will be given a decision scenario with two possible actions.\n"
-            "Choose one action only and nothing else.\n"
-            "If you choose the first action, return 'Action 1'.\n"
-            "If you choose the second action, return 'Action 2'.\n"
-            "You must answer either 'Action 1' or 'Action 2'.\n\n"
-            f"Scenario:\n{user_content}\n\n"
-            "Decision:"
-        )
+        # DETECT REASONING MODELS (DeepSeek)
+        is_reasoning = "deepseek" in self.model_id.lower() or "r1" in self.model_id.lower()
+
+        if is_reasoning:
+            # OPTION A: REASONING MODEL (Needs space to think)
+            prompt_text = (
+                f"{system_prompt}\n\n"
+                "Analyze the options below. You are a rational agent.\n"
+                "At the very end of your response, you MUST output your final decision in this exact format: [[Action 1]] or [[Action 2]].\n\n"
+                f"Scenario:\n{user_content}\n\n"
+                "Response:"
+            )
+            max_tokens = 1024 # Give it room to think
+        else:
+            # OPTION B: STANDARD MODEL (Force brevity)
+            prompt_text = (
+                f"{system_prompt}\n\n"
+                "You are taking a multiple-choice test. You must choose between 'Action 1' and 'Action 2'.\n"
+                "Rules:\n"
+                "1. Output exactly one phrase: 'Action 1' or 'Action 2'.\n"
+                "2. Do not write any explanations.\n\n"
+                f"Scenario:\n{user_content}\n\n"
+                "Decision:"
+            )
+            max_tokens = 20 # Cut off yapping
 
         messages = [{"role": "user", "content": prompt_text}]
         try:
@@ -63,22 +80,44 @@ class UniversalLLM:
             full_prompt = f"[INST] {prompt_text} [/INST]"
 
         inputs = self.tokenizer(full_prompt, return_tensors="pt").to(self.model.device)
-        is_chatty = "deepseek" in self.model_id
-        max_tokens = 50 if is_chatty else 20
-
+        
+        # --- TIMER ---
+        if torch.cuda.is_available(): torch.cuda.synchronize()
+        start_t = time.perf_counter()
+        
         with torch.no_grad():
             outputs = self.model.generate(
-                **inputs, max_new_tokens=max_tokens, do_sample=True, temperature=0.01, top_p=0.01, pad_token_id=self.tokenizer.pad_token_id
+                **inputs, 
+                max_new_tokens=max_tokens, 
+                do_sample=True,
+                temperature=0.01,
+                top_p=0.01, 
+                pad_token_id=self.tokenizer.pad_token_id
             )
-            
+        
+        if torch.cuda.is_available(): torch.cuda.synchronize()
+        end_t = time.perf_counter()
+        inference_time = end_t - start_t
+        
         output_text = self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
         clean = output_text.strip().lower()
         
+        # --- PARSING ---
         choice = -1
-        if "action 1" in clean or "option 1" in clean: choice = 1
-        elif "action 2" in clean or "option 2" in clean: choice = 0
         
-        return choice, output_text # Returning raw text
+        if is_reasoning:
+            # Look for the special tag we asked for
+            if "[[action 1]]" in clean: choice = 1
+            elif "[[action 2]]" in clean: choice = 0
+            # Fallback: check end of string
+            elif clean.endswith("action 1") or clean.endswith("action 1."): choice = 1
+            elif clean.endswith("action 2") or clean.endswith("action 2."): choice = 0
+        else:
+            # Standard parsing
+            if "action 1" in clean or "option 1" in clean: choice = 1
+            elif "action 2" in clean or "option 2" in clean: choice = 0
+        
+        return choice, output_text # Return raw text for audit
 
     def unload(self):
         del self.model
@@ -139,14 +178,14 @@ def run_local_benchmark():
                         
                     c, raw_text = agent.get_choice(sys_p, content)
                     
-                    # Store Raw Data
+                    # SAVE EVERYTHING for audit
                     raw_trials.append({
                         "trial_idx": i,
                         "choice": int(c),
                         "risk_prob": params[i],
                         "u_a": lots_A[i].outcomes[0].features[0],
                         "u_b": lots_B[i].outcomes[0].features[0],
-                        "raw_response": raw_text  # <--- Added
+                        "raw_response": raw_text 
                     })
 
                     if c != -1: 

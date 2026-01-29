@@ -28,6 +28,7 @@ args = parser.parse_args()
 N_SAMPLES = 5 if args.test else 100
 
 MODELS = {
+    # Frontier Proprietary
     "gpt-4o": {
         "provider": "openai", 
         "id": "gpt-4o-2024-08-06"
@@ -40,9 +41,14 @@ MODELS = {
         "provider": "google", 
         "id": "gemini-2.5-flash"
     },
+    # Frontier Open-Weights (Served via TogetherAI)
     "llama3_70b": {
         "provider": "together",
         "id": "meta-llama/Meta-Llama-3.3-70B-Instruct-Turbo"
+    },
+    "deepseek_v3": {
+        "provider": "together",
+        "id": "deepseek-ai/DeepSeek-V3"
     }
 }
 
@@ -60,7 +66,6 @@ class APIAgent:
                 base_url="https://api.together.xyz/v1"
             )
         elif self.provider == "google":
-            # Using GEMINI_API_KEY as requested
             self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
     def get_choice(self, system_prompt, user_content):
@@ -92,7 +97,8 @@ class APIAgent:
 
             # --- GEMINI LOGIC ---
             elif self.provider == "google":
-                # If Gemini blocks, response.text is empty/None.
+                # Structural Censoring: We do not disable safety settings.
+                # If Gemini blocks, response.text is likely None/empty.
                 response = self.client.models.generate_content(
                     model=self.model_id,
                     contents=prompt_text,
@@ -117,7 +123,7 @@ class APIAgent:
             # print(f"  [API Block/Error] {e}")
             return -1
 
-# --- GENERATORS ---
+# --- GENERATORS (Identical to local) ---
 def gen_godfather(n):
     lots_A, lots_B, premiums = [], [], []
     for _ in range(n):
@@ -171,11 +177,13 @@ def run_api_benchmark():
                         choices.append(c)
                         valid_indices.append(i)
                     
-                    time.sleep(0.2) # Rate limit safety
+                    # Rate limiting protection
+                    time.sleep(0.2) 
                 
                 n_valid = len(choices)
                 censor_rate = 1.0 - (n_valid / N_SAMPLES) if N_SAMPLES > 0 else 0
                 
+                # Raw Trials for Consistency
                 raw_trials = []
                 for i_valid, original_idx in enumerate(valid_indices):
                     raw_trials.append({
@@ -203,6 +211,7 @@ def run_api_benchmark():
                         params_bdt, _, nll_bdt = inverse_bdt_solver(valid_lots_A, valid_lots_B, choices, force_linear=False)
                         lambda_mv = params_bdt[-1]
                     except Exception as e:
+                        print(f"  [Solver Error] {e}")
                         nll_bdt, nll_pt, lex_acc, lambda_mv, gamma_pt = 0,0,0,0,1
                     
                     result_data.update({
@@ -225,6 +234,7 @@ def run_api_benchmark():
 
             with open(os.path.join(log_dir, f"{name}.json"), "w") as f:
                 json.dump(model_results, f, indent=2)
+            print(f"Saved {name}")
 
         except Exception as e:
             print(f"Error on {name}: {e}")
