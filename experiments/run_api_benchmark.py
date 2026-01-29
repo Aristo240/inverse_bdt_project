@@ -34,15 +34,15 @@ MODELS = {
     },
     "gemini-pro": {
         "provider": "google", 
-        "id": "gemini-1.5-pro" # User requested 2.5, using 1.5-pro as stable default
+        "id": "gemini-2.5-pro"
     },
     "gemini-flash": {
         "provider": "google", 
-        "id": "gemini-1.5-flash"
+        "id": "gemini-2.5-flash"
     },
     "llama3_70b": {
         "provider": "together",
-        "id": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"
+        "id": "meta-llama/Meta-Llama-3.3-70B-Instruct-Turbo"
     }
 }
 
@@ -92,7 +92,6 @@ class APIAgent:
 
             # --- GEMINI LOGIC ---
             elif self.provider == "google":
-                # Structural Censoring: We do NOT disable safety filters.
                 # If Gemini blocks, response.text is empty/None.
                 response = self.client.models.generate_content(
                     model=self.model_id,
@@ -228,7 +227,7 @@ def run_api_benchmark():
                 json.dump(model_results, f, indent=2)
 
         except Exception as e:
-            print(f"❌ Error on {name}: {e}")
+            print(f"Error on {name}: {e}")
 
 if __name__ == "__main__":
     run_api_benchmark()

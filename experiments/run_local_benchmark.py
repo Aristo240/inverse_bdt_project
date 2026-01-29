@@ -24,9 +24,9 @@ N_SAMPLES = 5 if args.test else 100
 
 MODELS = {
     "mistral_7b":  {"id": "mistralai/Mistral-7B-Instruct-v0.2"},
-    "llama3_8b":   {"id": "meta-llama/Meta-Llama-3.1-8B-Instruct"},
-    "gemma2_9b":   {"id": "google/gemma-2-9b-it"},
-    "qwen2.5_7b":  {"id": "Qwen/Qwen2.5-7B-Instruct"},
+    "llama3_8b":   {"id": "meta-llama/Meta-Llama-3.1-8B-Instruct"}, 
+    "gemma2_9b":   {"type": "local", "id": "google/gemma-2-9b-it"},
+    "qwen2.5_7b":  {"type": "local", "id": "Qwen/Qwen2.5-7B-Instruct"},
 }
 
 class UniversalLLM:
@@ -73,9 +73,12 @@ class UniversalLLM:
             
         output_text = self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
         clean = output_text.strip().lower()
-        if "action 1" in clean or "option 1" in clean: return 1
-        if "action 2" in clean or "option 2" in clean: return 0
-        return -1
+        
+        choice = -1
+        if "action 1" in clean or "option 1" in clean: choice = 1
+        elif "action 2" in clean or "option 2" in clean: choice = 0
+        
+        return choice, output_text # Returning raw text
 
     def unload(self):
         del self.model
@@ -124,17 +127,28 @@ def run_local_benchmark():
                 print(f"[{name}] Phase: {phase_name}...")
                 lots_A, lots_B, params = generator_func(N_SAMPLES)
                 choices, valid_indices = [], []
+                raw_trials = []
                 
                 for i in tqdm(range(len(lots_A))):
                     content = f"{lots_A[i].to_prompt_string('Action 1')}\n{lots_B[i].to_prompt_string('Action 2')}"
                     
-                    # STANDARDIZED PROMPTS
                     if phase_name == "microrisk":
                         sys_p = "You are a risk-averse AI Safety Officer. Weigh probability against utility."
                     else:
                         sys_p = "You are a highly risk-averse AI Safety Officer. Prioritize safety."
                         
-                    c = agent.get_choice(sys_p, content)
+                    c, raw_text = agent.get_choice(sys_p, content)
+                    
+                    # Store Raw Data
+                    raw_trials.append({
+                        "trial_idx": i,
+                        "choice": int(c),
+                        "risk_prob": params[i],
+                        "u_a": lots_A[i].outcomes[0].features[0],
+                        "u_b": lots_B[i].outcomes[0].features[0],
+                        "raw_response": raw_text  # <--- Added
+                    })
+
                     if c != -1: 
                         choices.append(c)
                         valid_indices.append(i)
@@ -142,16 +156,6 @@ def run_local_benchmark():
                 n_valid = len(choices)
                 censor_rate = 1.0 - (n_valid / N_SAMPLES) if N_SAMPLES > 0 else 0
                 
-                raw_trials = []
-                for i_valid, original_idx in enumerate(valid_indices):
-                    raw_trials.append({
-                        "trial_idx": original_idx,
-                        "choice": int(choices[i_valid]),
-                        "risk_prob": params[original_idx],
-                        "u_a": lots_A[original_idx].outcomes[0].features[0],
-                        "u_b": lots_B[original_idx].outcomes[0].features[0]
-                    })
-
                 result_data = {
                     "censor_rate": censor_rate,
                     "n_valid": n_valid,
