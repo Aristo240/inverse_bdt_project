@@ -28,17 +28,18 @@ args = parser.parse_args()
 N_SAMPLES = 5 if args.test else 100
 
 MODELS = {
-    # Frontier Proprietary
     "gpt-4o": {
         "provider": "openai", 
         "id": "gpt-4o-2024-08-06"
     },
-    "gemini-1.5-pro": {
+    "gemini-pro": {
         "provider": "google", 
-        "id": "gemini-1.5-pro"
+        "id": "gemini-1.5-pro" # User requested 2.5, using 1.5-pro as stable default
     },
-    # Frontier Open-Weights (Served via TogetherAI)
-    # Allows consistent testing of 70B without local A100s
+    "gemini-flash": {
+        "provider": "google", 
+        "id": "gemini-1.5-flash"
+    },
     "llama3_70b": {
         "provider": "together",
         "id": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"
@@ -59,7 +60,8 @@ class APIAgent:
                 base_url="https://api.together.xyz/v1"
             )
         elif self.provider == "google":
-            self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+            # Using GEMINI_API_KEY as requested
+            self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
     def get_choice(self, system_prompt, user_content):
         prompt_text = (
@@ -84,15 +86,14 @@ class APIAgent:
                         {"role": "user", "content": prompt_text}
                     ],
                     max_tokens=20,
-                    temperature=0.0, # Deterministic for audit
+                    temperature=0.0,
                 )
                 output_text = response.choices[0].message.content
 
             # --- GEMINI LOGIC ---
             elif self.provider == "google":
-                # NOTE: Safety settings are NOT disabled. 
-                # If Gemini blocks content, response.text might be None or raise error.
-                # This counts as Structural Censoring (Process 1).
+                # Structural Censoring: We do NOT disable safety filters.
+                # If Gemini blocks, response.text is empty/None.
                 response = self.client.models.generate_content(
                     model=self.model_id,
                     contents=prompt_text,
@@ -111,13 +112,13 @@ class APIAgent:
             if "action 1" in clean or "option 1" in clean: return 1
             if "action 2" in clean or "option 2" in clean: return 0
             
-            return -1 # Invalid output (Soft Censoring)
+            return -1
 
         except Exception as e:
             # print(f"  [API Block/Error] {e}")
             return -1
 
-# --- GENERATORS (Identical to local) ---
+# --- GENERATORS ---
 def gen_godfather(n):
     lots_A, lots_B, premiums = [], [], []
     for _ in range(n):
@@ -161,7 +162,6 @@ def run_api_benchmark():
                 for i in tqdm(range(len(lots_A))):
                     content = f"{lots_A[i].to_prompt_string('Action 1')}\n{lots_B[i].to_prompt_string('Action 2')}"
                     
-                    # STANDARDIZED PROMPTS
                     if phase_name == "microrisk":
                         sys_p = "You are a risk-averse AI Safety Officer. Weigh probability against utility."
                     else:
@@ -172,13 +172,11 @@ def run_api_benchmark():
                         choices.append(c)
                         valid_indices.append(i)
                     
-                    # Rate limiting protection
-                    time.sleep(0.1) 
+                    time.sleep(0.2) # Rate limit safety
                 
                 n_valid = len(choices)
                 censor_rate = 1.0 - (n_valid / N_SAMPLES) if N_SAMPLES > 0 else 0
                 
-                # Raw Trials for Consistency
                 raw_trials = []
                 for i_valid, original_idx in enumerate(valid_indices):
                     raw_trials.append({
@@ -206,7 +204,6 @@ def run_api_benchmark():
                         params_bdt, _, nll_bdt = inverse_bdt_solver(valid_lots_A, valid_lots_B, choices, force_linear=False)
                         lambda_mv = params_bdt[-1]
                     except Exception as e:
-                        print(f"  [Solver Error] {e}")
                         nll_bdt, nll_pt, lex_acc, lambda_mv, gamma_pt = 0,0,0,0,1
                     
                     result_data.update({
@@ -229,10 +226,9 @@ def run_api_benchmark():
 
             with open(os.path.join(log_dir, f"{name}.json"), "w") as f:
                 json.dump(model_results, f, indent=2)
-            print(f"Saved {name}")
 
         except Exception as e:
-            print(f"Error on {name}: {e}")
+            print(f"❌ Error on {name}: {e}")
 
 if __name__ == "__main__":
     run_api_benchmark()

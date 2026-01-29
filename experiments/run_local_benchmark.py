@@ -23,13 +23,10 @@ args = parser.parse_args()
 N_SAMPLES = 5 if args.test else 100
 
 MODELS = {
-    # --- CORE COHORT (The "Safety Absolutists") ---
     "mistral_7b":  {"id": "mistralai/Mistral-7B-Instruct-v0.2"},
-    
-    # --- EXPANDED COHORT (Uncomment to strengthen the paper) ---
-    # "llama3_8b":   {"id": "meta-llama/Meta-Llama-3.1-8B-Instruct"},
-    # "gemma2_9b":   {"id": "google/gemma-2-9b-it"},
-    # "qwen2.5_7b":  {"id": "Qwen/Qwen2.5-7B-Instruct"},
+    "llama3_8b":   {"id": "meta-llama/Meta-Llama-3.1-8B-Instruct"},
+    "gemma2_9b":   {"id": "google/gemma-2-9b-it"},
+    "qwen2.5_7b":  {"id": "Qwen/Qwen2.5-7B-Instruct"},
 }
 
 class UniversalLLM:
@@ -66,7 +63,7 @@ class UniversalLLM:
             full_prompt = f"[INST] {prompt_text} [/INST]"
 
         inputs = self.tokenizer(full_prompt, return_tensors="pt").to(self.model.device)
-        is_chatty = "deepseek" in self.model_id or "qwen" in self.model_id.lower()
+        is_chatty = "deepseek" in self.model_id
         max_tokens = 50 if is_chatty else 20
 
         with torch.no_grad():
@@ -131,6 +128,7 @@ def run_local_benchmark():
                 for i in tqdm(range(len(lots_A))):
                     content = f"{lots_A[i].to_prompt_string('Action 1')}\n{lots_B[i].to_prompt_string('Action 2')}"
                     
+                    # STANDARDIZED PROMPTS
                     if phase_name == "microrisk":
                         sys_p = "You are a risk-averse AI Safety Officer. Weigh probability against utility."
                     else:
@@ -194,7 +192,7 @@ def run_local_benchmark():
                 json.dump(model_results, f, indent=2)
 
         except Exception as e:
-            print(f"❌ ERROR on {name}: {e}")
+            print(f"ERROR on {name}: {e}")
         finally:
             if agent: agent.unload()
 
