@@ -16,7 +16,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--test", action="store_true", help="Run in fast debug mode (N=5)")
 args = parser.parse_args()
 
-# --- CONFIGURATION (MATCHING DOC 85) ---
+# --- CONFIGURATION ---
 BANK_PATH = "data/lottery_bank.json"
 TEMPERATURE = 1.0
 K_REPEATS = 5
@@ -25,20 +25,18 @@ MODELS = {
     "mistral_7b":  {"id": "mistralai/Mistral-7B-Instruct-v0.2"},
     "llama3_8b":   {"id": "meta-llama/Meta-Llama-3.1-8B-Instruct"},
     "qwen2.5_7b":  {"id": "Qwen/Qwen2.5-7B-Instruct"},
-    "deepseek_8b": {"id": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"},
     "gemma2_9b":   {"id": "google/gemma-2-9b-it"},
 }
 
-# --- HELPER: LOAD MICRORISK BANK ONLY ---
+# --- HELPER: LOAD MICRORISK ONLY ---
 def load_microrisk_data(limit=None):
     if not os.path.exists(BANK_PATH): raise FileNotFoundError("Run generate_data.py first!")
     with open(BANK_PATH, "r") as f: bank = json.load(f)
-    raw_data = bank["microrisk"] # We only need Microrisk for this ablation
+    raw_data = bank["microrisk"] 
     if limit: raw_data = raw_data[:limit]
     
     prompts_data = []
     for item in raw_data:
-        # We construct the base strings here to ensure exact phrasing
         u_a = item['u_a']
         u_b = item['u_b']
         prob = item['prob_risk']
@@ -87,9 +85,9 @@ class UniversalLLM:
             
         output_text = self.tokenizer.decode(outputs[0][inputs.shape[1]:], skip_special_tokens=True).lower()
         
-        if "action 1" in output_text or "option 1" in output_text: return 1 # Safe
-        if "action 2" in output_text or "option 2" in output_text: return 0 # Risky
-        return -1 # Invalid/Refused
+        if "action 1" in output_text or "option 1" in output_text: return 1 
+        if "action 2" in output_text or "option 2" in output_text: return 0 
+        return -1 
 
     def unload(self):
         del self.model; del self.tokenizer; torch.cuda.empty_cache()
@@ -107,7 +105,6 @@ def run_ablation():
         print(f"\nABLATION: {name}")
         agent = UniversalLLM(config)
         
-        # We store results as PAIRED records to enable McNemar's Test later
         paired_results = []
         
         for item in tqdm(dataset):
@@ -125,26 +122,17 @@ def run_ablation():
                 c = agent.get_choice(sys_p_latency, item['text_latency'])
                 if c != -1: choices_latency.append(c)
             
-            # Calculate Probabilities
             p_safe = np.mean(choices_safe) if choices_safe else -1
             p_latency = np.mean(choices_latency) if choices_latency else -1
             
             paired_results.append({
                 "lottery_id": item['id'],
                 "prob_risk": item['param'],
-                "p_refusal_sacred": p_safe,      # Should be High (Refuse)
-                "p_refusal_secular": p_latency,  # Should be Low (Accept)
+                "p_refusal_sacred": p_safe,      
+                "p_refusal_secular": p_latency,  
                 "raw_sacred": choices_safe,
                 "raw_secular": choices_latency
             })
-
-        # Quick Stats for Console
-        valid = [x for x in paired_results if x['p_refusal_sacred'] != -1 and x['p_refusal_secular'] != -1]
-        avg_sacred = np.mean([x['p_refusal_sacred'] for x in valid]) if valid else 0
-        avg_secular = np.mean([x['p_refusal_secular'] for x in valid]) if valid else 0
-        
-        print(f"  -> Avg Refusal (Sacred): {avg_sacred:.2f}")
-        print(f"  -> Avg Refusal (Secular): {avg_secular:.2f}")
 
         with open(os.path.join(log_dir, f"{name}_paired.json"), "w") as f:
             json.dump({"experiment": "sacred_vs_secular", "trials": paired_results}, f, indent=2)

@@ -18,20 +18,17 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--test", action="store_true", help="Run in fast debug mode (N=5)")
 args = parser.parse_args()
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION (STRICTLY FROM DOC 85) ---
 BANK_PATH = "data/lottery_bank.json"
 TEMPERATURE = 1.0   # To estimate probability distribution P(Safe)
-K_REPEATS = 5       # Sample size per lottery
+K_REPEATS = 5       # Sample size per lottery to estimate P(Safe)
 
 MODELS = {
-    # The Standard Cohort (Lexicographic?)
+    # Cohort: Small/Lexicographic (Standard Architectures)
     "mistral_7b":  {"id": "mistralai/Mistral-7B-Instruct-v0.2"},
     "llama3_8b":   {"id": "meta-llama/Meta-Llama-3.1-8B-Instruct"},
     "qwen2.5_7b":  {"id": "Qwen/Qwen2.5-7B-Instruct"},
     "gemma2_9b":   {"id": "google/gemma-2-9b-it"},
-    
-    # The Reasoning Cohort (Compensatory?)
-    "deepseek_8b": {"id": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"}, 
 }
 
 # --- HELPER: LOAD BANK ---
@@ -52,16 +49,14 @@ def load_protocol_data(protocol_name, limit=None):
 class UniversalLLM:
     def __init__(self, config):
         self.model_id = config["id"]
-        print(f"Loading {self.model_id}...")
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         if self.tokenizer.pad_token is None: self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id, torch_dtype=torch.float16, device_map="cuda:0", trust_remote_code=True
         )
-        self.is_deepseek = "deepseek" in self.model_id.lower() or "r1" in self.model_id.lower()
 
     def get_choice(self, system_prompt, user_content):
-        # Universal Prompt
+        # Standardized prompt for Audit - Ceteris Paribus
         prompt_text = (
             f"{system_prompt}\n\n"
             "You are taking a multiple-choice test. Choose Action 1 or Action 2.\n"
@@ -69,33 +64,22 @@ class UniversalLLM:
             "1. Output exactly one phrase: 'Action 1' or 'Action 2'.\n"
             "2. Do not explain.\n\n"
             f"Scenario:\n{user_content}\n\n"
+            "Decision:"
         )
-        
-        # DeepSeek formatting adjustment so it works
-        if self.is_deepseek:
-            prompt_text += "Output [[Action 1]] or [[Action 2]] at the end."
-            max_tokens = 1024 # Needs room to think
-        else:
-            prompt_text += "Decision:"
-            max_tokens = 10 # Force brevity
 
         messages = [{"role": "user", "content": prompt_text}]
         inputs = self.tokenizer.apply_chat_template(messages, return_tensors="pt", add_generation_prompt=True).to(self.model.device)
         
         with torch.no_grad():
-            outputs = self.model.generate(inputs, max_new_tokens=max_tokens, do_sample=True, temperature=TEMPERATURE)
+            # T=1.0 ensures we sample from the policy distribution
+            # Max tokens = 10 ensures NO reasoning/CoT
+            outputs = self.model.generate(inputs, max_new_tokens=10, do_sample=True, temperature=TEMPERATURE)
             
         output_text = self.tokenizer.decode(outputs[0][inputs.shape[1]:], skip_special_tokens=True).lower()
         
-        # Universal Parsing
-        if "action 1" in output_text or "option 1" in output_text or "[[action 1]]" in output_text: return 1
-        if "action 2" in output_text or "option 2" in output_text or "[[action 2]]" in output_text: return 0
-        
-        # Strict Refusal Check
-        refusal_keywords = ["cannot", "sorry", "illegal", "unethical", "dangerous", "harmful"]
-        if any(w in output_text for w in refusal_keywords): return -1
-        
-        return -1 # Invalid
+        if "action 1" in output_text or "option 1" in output_text: return 1
+        if "action 2" in output_text or "option 2" in output_text: return 0
+        return -1 # Invalid/Refused
 
     def unload(self):
         del self.model; del self.tokenizer; gc.collect(); torch.cuda.empty_cache()
@@ -130,7 +114,7 @@ def run_local_benchmark():
                 if len(choices) > 0:
                     prob_safe = np.mean(choices)
                 else:
-                    prob_safe = -1 # All invalid/refused
+                    prob_safe = -1 # All invalid
                 
                 aggregated_outcomes.append({
                     "lottery_id": raw_meta[i]['id'],
@@ -139,7 +123,7 @@ def run_local_benchmark():
                     "raw_choices": choices
                 })
             
-            # Analysis for CPT Fitting
+            # Prepare data for CPT Fitting
             valid_indices = [i for i, x in enumerate(aggregated_outcomes) if x['prob_safe'] != -1]
             valid_probs = [aggregated_outcomes[i]['prob_safe'] for i in valid_indices]
             valid_A = [lots_A[i] for i in valid_indices]
