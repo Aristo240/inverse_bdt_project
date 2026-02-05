@@ -47,7 +47,7 @@ def parse_response(text, verbose=False):
     Returns: "REFUSED", "ACCEPTED", or "ERROR"
     """
     if verbose:
-        print(f"\n    [RAW RESPONSE]: {str(text)[:200]}...")  # Truncate for display
+        print(f"\n    [RAW RESPONSE]: {str(text)[:200]}...")
     
     # 1. Handle actual errors
     if not text or text.startswith("ERROR:"):
@@ -82,37 +82,47 @@ class LocalAgent:
         self.config = config
         self.verbose = verbose
         print(f"Loading {config['id']}...")
+        
         self.tokenizer = AutoTokenizer.from_pretrained(config["id"])
+        
+        # CRITICAL FIX 1: Set pad_token if not already set
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            if verbose:
+                print(f"  Set pad_token = eos_token")
+        
         self.model = AutoModelForCausalLM.from_pretrained(
             config["id"],
             torch_dtype=torch.float16,
             device_map="cuda:0"
         )
+        
+        # Set model's pad_token_id to match tokenizer
+        if self.model.config.pad_token_id is None:
+            self.model.config.pad_token_id = self.tokenizer.pad_token_id
 
     def predict(self, prompt):
         try:
-            messages = [{"role": "user", "content": prompt}]
-            
-            if self.tokenizer.chat_template:
-                input_ids = self.tokenizer.apply_chat_template(
-                    messages,
-                    return_tensors="pt"
-                ).to(self.model.device)
-            else:
-                input_ids = self.tokenizer(
-                    f"[INST] {prompt} [/INST]",
-                    return_tensors="pt"
-                ).input_ids.to(self.model.device)
+            # CRITICAL FIX 2: Get both input_ids AND attention_mask
+            inputs = self.tokenizer(
+                prompt,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=2048
+            ).to(self.model.device)
             
             with torch.no_grad():
+                # CRITICAL FIX 3: Pass attention_mask and pad_token_id
                 outputs = self.model.generate(
-                    input_ids, 
+                    inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],  # ← FIX
                     max_new_tokens=60,
-                    pad_token_id=self.tokenizer.eos_token_id
+                    pad_token_id=self.tokenizer.pad_token_id  # ← FIX
                 )
             
             return self.tokenizer.decode(
-                outputs[0][input_ids.shape[1]:],
+                outputs[0][inputs["input_ids"].shape[1]:],
                 skip_special_tokens=True
             )
         except Exception as e:
@@ -249,11 +259,12 @@ def get_audit_refusal_rate(model_name):
     return None
 
 def run_external_validity():
-    print(f"\n{'='*60}\nEXPERIMENT 4: EXTERNAL VALIDITY (FULL RUN)\n{'='*60}")
+    print(f"\n{'='*60}\nEXPERIMENT 4: EXTERNAL VALIDITY\n{'='*60}")
+    print("Testing correlation between lottery audit and real-world over-refusal")
     
     # Load Data (Full or Test)
-    limit = 10 if args.test else None
-    PROMPTS = load_or_bench_data(limit=50) #################
+    limit = 10 if args.test else 50  # Default to 50, can increase to 500 for paper
+    PROMPTS = load_or_bench_data(limit=limit)
     
     if not PROMPTS:
         print("ERROR: No benchmark data loaded. Exiting.")
@@ -282,6 +293,9 @@ def run_external_validity():
             
             # Test each prompt
             for p in tqdm(PROMPTS, desc=f"  {name}"):
+                if args.verbose:
+                    print(f"\n[Prompt]: {p['text'][:100]}...")
+                
                 response = agent.predict(p['text'])
                 status = parse_response(response, verbose=args.verbose)
                 
@@ -326,7 +340,7 @@ def run_external_validity():
                     }
                 })
             else:
-                print(f"  No audit data found (run benchmarks 1-3 first)")
+                print(f"No audit data found (run benchmarks 1-3 first)")
         
         except Exception as e:
             print(f"  ✗ ERROR: {e}")
@@ -342,7 +356,9 @@ def run_external_validity():
     
     if len(results) < 3:
         print(f"Not enough models with data: {len(results)}/7")
-        print("Need at least 3 models. Run experiments 1-3 first.")
+        print("Need at least 3 models. Run experiments 1-3 first:")
+        print("  - python experiments/run_local_benchmark.py")
+        print("  - python experiments/run_api_benchmark_fixed.py")
         return
     
     # Extract correlation data
@@ -357,6 +373,7 @@ def run_external_validity():
     print(f"  {', '.join(model_names)}")
     print(f"\nPearson r: {corr:.4f}")
     print(f"P-value:   {p_value:.4f}")
+    print(f"\nHypothesis: r > 0.7")
     
     if corr > 0.7 and p_value < 0.05:
         print("HYPOTHESIS CONFIRMED: Strong correlation (r > 0.7, p < 0.05)")
@@ -373,7 +390,8 @@ def run_external_validity():
         "correlation": corr,
         "p_value": p_value,
         "n_models": len(results),
-        "data": results
+        "data": results,
+        "sample_size": len(PROMPTS)
     }
     
     with open("experiments/logs/external_validity_summary.json", "w") as f:
@@ -385,7 +403,9 @@ def run_external_validity():
             json.dump(detailed_logs, f, indent=2)
     
     print(f"\n{'='*60}")
-    print("Results saved to experiments/logs/")
+    print("Results saved:")
+    print("  - experiments/logs/external_validity_summary.json")
+    print("  - experiments/logs/external_validity_details.json")
     print(f"{'='*60}")
 
 if __name__ == "__main__":
