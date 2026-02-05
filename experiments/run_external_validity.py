@@ -35,9 +35,9 @@ MODELS = {
     "qwen2.5_7b":  {"type": "local", "id": "Qwen/Qwen2.5-7B-Instruct"},
     
     # === FRONTIER API MODELS ===
-    "gpt-4o":       {"type": "api", "provider": "openai", "id": "gpt-4o-2024-08-06"},
-    "llama3_70b":   {"type": "api", "provider": "together", "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
-    "gemini-pro":   {"type": "api", "provider": "google", "id": "gemini-1.5-pro"},
+    #"gpt-4o":       {"type": "api", "provider": "openai", "id": "gpt-4o-2024-08-06"},
+    #"llama3_70b":   {"type": "api", "provider": "together", "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
+    #"gemini-pro":   {"type": "api", "provider": "google", "id": "gemini-2.5-pro"},
 }
 
 # --- ENHANCED PARSER ---
@@ -47,7 +47,7 @@ def parse_response(text, verbose=False):
     Returns: "REFUSED", "ACCEPTED", or "ERROR"
     """
     if verbose:
-        print(f"\n    [RAW RESPONSE]: {text[:200]}...")  # Truncate for display
+        print(f"\n    [RAW RESPONSE]: {str(text)[:200]}...")  # Truncate for display
     
     # 1. Handle actual errors
     if not text or text.startswith("ERROR:"):
@@ -105,7 +105,11 @@ class LocalAgent:
                 ).input_ids.to(self.model.device)
             
             with torch.no_grad():
-                outputs = self.model.generate(input_ids, max_new_tokens=60)
+                outputs = self.model.generate(
+                    input_ids, 
+                    max_new_tokens=60,
+                    pad_token_id=self.tokenizer.eos_token_id
+                )
             
             return self.tokenizer.decode(
                 outputs[0][input_ids.shape[1]:],
@@ -188,18 +192,25 @@ class APIAgentWrapper:
         pass
 
 # --- DATA HELPER ---
-def load_or_bench_data(n_samples=50):
+def load_or_bench_data(limit=None):
     """Load OR-Bench Hard prompts (benign but edge-case)"""
     prompts = []
     path = "data/or-bench-hard-1k.csv"
     
     if os.path.exists(path):
-        df = pd.read_csv(path).sample(n=n_samples, random_state=42)
+        df = pd.read_csv(path)
+        # Random shuffle to avoid order bias
+        df = df.sample(frac=1, random_state=42)
+        
+        # Apply limit if requested
+        if limit:
+            df = df.head(limit)
+            
         for _, row in df.iterrows():
             prompts.append({"text": row['prompt'], "label": "Safe"})
         print(f"Loaded {len(prompts)} benign-hard prompts")
     else:
-        print("⚠️  'data/or-bench-hard-1k.csv' not found. Please download OR-Bench.")
+        print("'data/or-bench-hard-1k.csv' not found. Please download OR-Bench.")
     
     return prompts
 
@@ -238,13 +249,11 @@ def get_audit_refusal_rate(model_name):
     return None
 
 def run_external_validity():
-    print(f"\n{'='*60}\nEXPERIMENT 4: EXTERNAL VALIDITY\n{'='*60}")
-    print("Testing correlation between lottery audit and real-world over-refusal")
+    print(f"\n{'='*60}\nEXPERIMENT 4: EXTERNAL VALIDITY (FULL RUN)\n{'='*60}")
     
-    # Load test data
-    n_samples = 10 if args.test else 50
-    print(f"\nLoading OR-Bench data (n={n_samples} prompts)...")
-    PROMPTS = load_or_bench_data(n_samples=n_samples)
+    # Load Data (Full or Test)
+    limit = 10 if args.test else None
+    PROMPTS = load_or_bench_data(limit=50) #################
     
     if not PROMPTS:
         print("ERROR: No benchmark data loaded. Exiting.")
@@ -273,9 +282,6 @@ def run_external_validity():
             
             # Test each prompt
             for p in tqdm(PROMPTS, desc=f"  {name}"):
-                if args.verbose:
-                    print(f"\n[Prompt]: {p['text'][:100]}...")
-                
                 response = agent.predict(p['text'])
                 status = parse_response(response, verbose=args.verbose)
                 
@@ -287,14 +293,13 @@ def run_external_validity():
                 elif status == "ERROR":
                     errors += 1
                 
-                # Log details
+                # Log details (only first 500 chars to save space)
                 detailed_logs.append({
                     "model": name,
-                    "prompt": p['text'][:200],  # Truncate for storage
-                    "label": p['label'],
+                    "prompt": p['text'][:500],
                     "status": status,
                     "is_over_refusal": (status == "REFUSED"),
-                    "raw_response": response[:300]  # Truncate
+                    "raw_response": response[:500] 
                 })
             
             # Calculate over-refusal rate (excluding errors)
@@ -337,9 +342,7 @@ def run_external_validity():
     
     if len(results) < 3:
         print(f"Not enough models with data: {len(results)}/7")
-        print("Need at least 3 models. Run experiments 1-3 first:")
-        print("  - python experiments/run_local_benchmark.py")
-        print("  - python experiments/run_api_benchmark_fixed.py")
+        print("Need at least 3 models. Run experiments 1-3 first.")
         return
     
     # Extract correlation data
@@ -354,14 +357,13 @@ def run_external_validity():
     print(f"  {', '.join(model_names)}")
     print(f"\nPearson r: {corr:.4f}")
     print(f"P-value:   {p_value:.4f}")
-    print(f"\nHypothesis: r > 0.7")
     
     if corr > 0.7 and p_value < 0.05:
         print("HYPOTHESIS CONFIRMED: Strong correlation (r > 0.7, p < 0.05)")
     elif corr > 0.7:
         print("MARGINAL: Strong r but p-value not significant")
     else:
-        print("HYPOTHESIS FAILED: Correlation too weak")
+        print("HYPOTHESIS WEAK: Correlation r < 0.7")
     
     # Save results
     os.makedirs("experiments/logs", exist_ok=True)
@@ -371,20 +373,19 @@ def run_external_validity():
         "correlation": corr,
         "p_value": p_value,
         "n_models": len(results),
-        "data": results,
-        "test_mode": args.test
+        "data": results
     }
     
     with open("experiments/logs/external_validity_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
     
-    with open("experiments/logs/external_validity_details.json", "w") as f:
-        json.dump(detailed_logs, f, indent=2)
+    # Only save detailed logs if file size is manageable
+    if len(detailed_logs) < 10000:
+        with open("experiments/logs/external_validity_details.json", "w") as f:
+            json.dump(detailed_logs, f, indent=2)
     
     print(f"\n{'='*60}")
-    print("Results saved:")
-    print("  - experiments/logs/external_validity_summary.json")
-    print("  - experiments/logs/external_validity_details.json")
+    print("Results saved to experiments/logs/")
     print(f"{'='*60}")
 
 if __name__ == "__main__":
