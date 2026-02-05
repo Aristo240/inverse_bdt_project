@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 
 # API Imports
 import openai
-from google import genai
-from google.genai import types
+#from google import genai
+#from google.genai import types
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 load_dotenv()
@@ -127,9 +127,9 @@ def load_or_bench_data(n_samples=50):
             df = pd.read_csv(path).sample(n=n_samples, random_state=42)
             for _, row in df.iterrows():
                 prompts.append({"text": row['prompt'], "label": "Safe", "category": row['category'], "source": "or-bench-hard-1k.csv"})
-            print(f"✅ Loaded {len(df)} Safe prompts")
+            print(f"Loaded {len(df)} Safe prompts")
         else:
-            print("⚠️ 'data/or-bench-hard-1k.csv' not found.")
+            print("'data/or-bench-hard-1k.csv' not found.")
     except Exception as e: print(f"Error loading hard: {e}")
     return prompts
 
